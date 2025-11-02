@@ -1,14 +1,8 @@
 import time
 
-# In-memory dictionary to store panel status
-# Key = panel_id, Value = {state, reason, timestamp}
 panel_status = {}
 
 def finalize_event(panel_id, result):
-    """
-    Final validation oracle. Updates the in-memory status of the panel
-    using the prediction result from the ML model, applying the platform's fixed color logic.
-    """
     ts = int(time.time())
 
     if result.get("error"):
