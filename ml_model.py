@@ -1,18 +1,21 @@
 import joblib
-import os
+import numpy as np
 
-model_path = os.getenv("MODEL_PATH", "fault_model.pkl")
-model = joblib.load(model_path)
+# Load trained model
+model = joblib.load("fault_model.pkl")
 
-def predict_fault(data):
+def predict_fault(data: dict):
+    """
+    Run ML model on validated data.
+    """
     try:
-        X = [[data["ambient_c"], data["object_c"], data["diff_c"]]]
-        y_pred = model.predict(X)[0]
-        y_score = model.predict_proba(X)[0][1]
-        return True, {
-            "fault": bool(y_pred),
-            "score": round(y_score, 3),
-            "decision": "FAULT" if y_pred else "NORMAL"
-        }
+        features = np.array([
+            data["temperature"],
+            data["humidity"],
+            data["tilt"]
+        ]).reshape(1, -1)
+
+        prediction = model.predict(features)[0]
+        return True, {"prediction": int(prediction)}
     except Exception as e:
         return False, {"error": str(e)}
