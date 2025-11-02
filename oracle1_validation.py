@@ -6,8 +6,8 @@ def validate_payload(data):
     amb = mlx.get("ambient_c")
     obj = mlx.get("object_c")
 
-    if panel_id != "ID_27_C_42":
-        return False, {"reason": "unauthorized_panel"}
+    if not panel_id.startswith("ID_"):
+    return False, {"reason": "invalid_panel_id_format"}
 
     if amb is None or obj is None:
         return False, {"reason": "missing_temperature_values"}
