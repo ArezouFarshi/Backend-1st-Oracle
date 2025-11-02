@@ -1,5 +1,5 @@
 def validate_payload(data):
-    panel_id = data.get("panel_id", "")
+    panel_id = data.get("panel_id", "").strip()
     sensors = data.get("sensors", {})
     mlx = sensors.get("mlx90614", {})
 
@@ -7,7 +7,7 @@ def validate_payload(data):
     obj = mlx.get("object_c")
 
     if not panel_id.startswith("ID_"):
-    return False, {"reason": "invalid_panel_id_format"}
+        return False, {"reason": "invalid_panel_id_format"}
 
     if amb is None or obj is None:
         return False, {"reason": "missing_temperature_values"}
@@ -19,7 +19,7 @@ def validate_payload(data):
         return False, {"reason": "invalid_number_format"}
 
     if not (-40 <= amb <= 125) or not (-40 <= obj <= 380):
-        return False, {"reason": "values_out_of_range"}
+        return False, {"reason": "temperature_out_of_range"}
 
     return True, {
         "panel_id": panel_id,
