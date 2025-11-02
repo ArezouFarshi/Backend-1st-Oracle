@@ -1,7 +1,5 @@
 services:
   - type: web
     name: oracle-ml-backend
-    env: python
+    env: docker
     plan: free
-    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
-    startCommand: bash start.sh
