@@ -1,5 +1,4 @@
 from flask import Flask, request, jsonify
-import time
 from oracle1_validation import validate_payload
 from ml_model import predict_fault
 from oracle2_finalize import finalize_event
@@ -17,14 +16,17 @@ def ingest():
     except Exception:
         return jsonify({"ok": False, "error": "Invalid JSON"}), 400
 
+    # Oracle 1: validate payload
     valid, cleaned = validate_payload(data)
     if not valid:
-        result = {"error": cleaned.get("reason", "Validation failed")}
-    else:
-        ml_ok, result = predict_fault(cleaned)
-        if not ml_ok:
-            result = {"error": result.get("error", "ML model error")}
+        return jsonify({"ok": False, "error": cleaned.get("reason", "Validation failed")}), 400
 
+    # ML: predict fault
+    ml_ok, result = predict_fault(cleaned)
+    if not ml_ok:
+        return jsonify({"ok": False, "error": result.get("error", "ML model error")}), 500
+
+    # Oracle 2: finalize event
     final_ok, status = finalize_event(cleaned.get("panel_id", "unknown"), result)
     if final_ok:
         return jsonify({"ok": True, "status": status}), 200
