@@ -1,0 +1,6 @@
+﻿services:
+  - type: web
+    name: facade-backend
+    env: python
+    buildCommand: ""
+    startCommand: python app.py
