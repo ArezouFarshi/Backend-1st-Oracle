@@ -1,13 +1,10 @@
 def finalize_event(panel_id: str, result: dict):
-    """
-    Oracle 2: Finalize ML output.
-    Here you could add thresholds, blockchain anchoring, etc.
-    For now, just return a status string.
-    """
     try:
-        prediction = result.get("prediction")
+        prediction = result.get("prediction", 0)
         if prediction == 1:
             status = f"Panel {panel_id}: Fault detected"
+        elif prediction == 2:
+            status = f"Panel {panel_id}: Warning detected"
         else:
             status = f"Panel {panel_id}: Normal operation"
         return True, status
