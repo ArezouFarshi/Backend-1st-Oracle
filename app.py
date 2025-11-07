@@ -11,6 +11,23 @@ panel_history = {}
 # Set your admin API key here (change this for production!)
 ADMIN_API_KEY = "Admin_acsess_to_platform"
 
+def diagnose_fault(data):
+    messages = []
+    # Check surface temperature
+    if data.get('surface_temp') is not None and (data['surface_temp'] < 20 or data['surface_temp'] > 35):
+        messages.append("Surface temperature out of safe range")
+    # Check ambient temperature
+    if data.get('ambient_temp') is not None and (data['ambient_temp'] < 20 or data['ambient_temp'] > 35):
+        messages.append("Ambient temperature out of safe range")
+    # Check for abnormal orientation (tilt/fall)
+    if (abs(data.get('accel_x', 0)) > 1.2 or
+        abs(data.get('accel_y', 0)) > 1.2 or
+        abs(data.get('accel_z', 1)) < 0.8):
+        messages.append("Panel orientation abnormal (possible tilt or displacement)")
+    if not messages:
+        messages.append("Anomaly detected (unspecified)")
+    return "; ".join(messages)
+
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"ok": True, "status": "Oracle backend running"})
@@ -50,28 +67,5 @@ def ingest():
     panel_history.setdefault(panel_id, []).append({"input": data, "result": status})
 
     if final_ok:
-        return jsonify({"ok": True, "status": status}), 200
-    else:
-        return jsonify({"ok": False, "status": status}), 500
-
-@app.route("/panel_history/<panel_id>", methods=["GET"])
-def get_panel_history(panel_id):
-    # Show all saved events for this panel (since last restart)
-    return jsonify({"panel_id": panel_id, "history": panel_history.get(panel_id, [])})
-
-@app.route("/retrain", methods=["POST"])
-def retrain():
-    # Expects JSON: { "features": [...], "labels": [...] }
-    payload = request.get_json(force=True)
-    features = payload.get("features")
-    labels = payload.get("labels")
-    if not features or not labels:
-        return jsonify({"ok": False, "error": "Features and labels required"}), 400
-    ok, msg = retrain_model(features, labels)
-    if ok:
-        return jsonify({"ok": True, "status": msg}), 200
-    else:
-        return jsonify({"ok": False, "error": msg}), 500
-
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+        # If status indicates a fault, add diagnosis
+        if "Fault
