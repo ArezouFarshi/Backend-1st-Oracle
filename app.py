@@ -13,17 +13,22 @@ ADMIN_API_KEY = "Admin_acsess_to_platform"
 
 def diagnose_fault(data):
     messages = []
-    # Check surface temperature
-    if data.get('surface_temp') is not None and (data['surface_temp'] < 20 or data['surface_temp'] > 35):
-        messages.append("Surface temperature out of safe range")
-    # Check ambient temperature
-    if data.get('ambient_temp') is not None and (data['ambient_temp'] < 20 or data['ambient_temp'] > 35):
-        messages.append("Ambient temperature out of safe range")
-    # Check for abnormal orientation (tilt/fall)
-    if (abs(data.get('accel_x', 0)) > 1.2 or
-        abs(data.get('accel_y', 0)) > 1.2 or
-        abs(data.get('accel_z', 1)) < 0.8):
-        messages.append("Panel orientation abnormal (possible tilt or displacement)")
+    # Surface temperature too high
+    if data.get('surface_temp') is not None and data['surface_temp'] > 35:
+        messages.append("High surface temperature: possible solar load, thermal bridge, or insulation defect.")
+    # Surface temperature too low (in cold climate)
+    elif data.get('surface_temp') is not None and data['surface_temp'] < 20:
+        messages.append("Low surface temperature: possible thermal bridge, insulation defect, or air leakage.")
+
+    # Ambient temperature abnormal
+    if data.get('ambient_temp') is not None and (data['ambient_temp'] < 20 or data['ambient_temp'] > 28):
+        messages.append("Ambient temperature out of comfort range: possible HVAC issue or open window.")
+
+    # Panel moved/displaced
+    accel_x, accel_y, accel_z = data.get('accel_x', 0), data.get('accel_y', 0), data.get('accel_z', 1)
+    if abs(accel_x) > 1.2 or abs(accel_y) > 1.2 or abs(accel_z) < 0.8:
+        messages.append("Panel orientation abnormal: possible displacement, fixing failure, or wind-induced movement.")
+
     if not messages:
         messages.append("Anomaly detected (unspecified)")
     return "; ".join(messages)
