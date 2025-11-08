@@ -1,15 +1,15 @@
+import os
+import time
 from flask import Flask, request, jsonify, send_file, abort
+from web3 import Web3
 from oracle1_validation import validate_payload
 from ml_model import predict_fault, retrain_model
-from oracle2_finalize import finalize_event
-
-from web3 import Web3
-import os, time
 
 app = Flask(__name__)
 
-panel_history = {}
-ADMIN_API_KEY = "Admin_acsess_to_platform"
+# --- access and state ---
+ADMIN_API_KEY = "Admin_acsess_to_platform"  # keep your existing wording
+panel_history = {}  # { panel_id: "not_installed" | "normal" | "warning" | "fault" | "system_error" }
 
 COLOR_CODES = {
     "not_installed":   ("Not installed yet", "gray"),
@@ -20,20 +20,24 @@ COLOR_CODES = {
 }
 
 # --- Web3 setup ---
-INFURA_URL = os.environ.get("INFURA_URL", "https://sepolia.infura.io/v3/51bc36040f314e85bf103ff18c570993")
-w3 = Web3(Web3.HTTPProvider(INFURA_URL))
+INFURA_URL = os.environ["INFURA_URL"]
+ORACLE_PRIVATE_KEY = os.environ["ORACLE_PRIVATE_KEY"]
+CONTRACT_ADDRESS = os.environ.get("CONTRACT_ADDRESS", "0xB0561d4580126DdF8DEEA9B7e356ee3F26A52e40")
 
-# ABI (paste your ABI JSON here)
-abi = [
+w3 = Web3(Web3.HTTPProvider(INFURA_URL))
+oracle_account = w3.eth.account.from_key(ORACLE_PRIVATE_KEY)
+
+# Minimal ABI for addPanelEvent()
+ABI = [
     {
         "inputs": [
-            {"internalType": "string","name": "panel_id","type": "string"},
-            {"internalType": "bool","name": "ok","type": "bool"},
-            {"internalType": "string","name": "color","type": "string"},
-            {"internalType": "string","name": "status","type": "string"},
-            {"internalType": "int256","name": "prediction","type": "int256"},
-            {"internalType": "string","name": "reason","type": "string"},
-            {"internalType": "uint256","name": "timestamp","type": "uint256"}
+            {"internalType": "string", "name": "panelId", "type": "string"},
+            {"internalType": "bool", "name": "ok", "type": "bool"},
+            {"internalType": "string", "name": "color", "type": "string"},
+            {"internalType": "string", "name": "status", "type": "string"},
+            {"internalType": "int256", "name": "prediction", "type": "int256"},
+            {"internalType": "string", "name": "reason", "type": "string"},
+            {"internalType": "uint256", "name": "timestamp", "type": "uint256"}
         ],
         "name": "addPanelEvent",
         "outputs": [],
@@ -42,20 +46,19 @@ abi = [
     }
 ]
 
-contract_address = "0xB0561d4580126DdF8DEEA9B7e356ee3F26A52e40"
-contract = w3.eth.contract(address=contract_address, abi=abi)
+contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=ABI)
 
-oracle_private_key = os.environ["ORACLE_PRIVATE_KEY"]
-oracle_account = w3.eth.account.from_key(oracle_private_key)
-
-def log_to_blockchain(panel_id, backend_json):
+def log_to_blockchain(panel_id: str, payload: dict) -> str:
+    """
+    Build and send addPanelEvent(panelId, ok, color, status, prediction, reason, timestamp).
+    """
     tx = contract.functions.addPanelEvent(
         panel_id,
-        backend_json.get("ok", False),
-        backend_json.get("color", "purple"),
-        backend_json.get("status", "System error"),
-        int(backend_json.get("prediction", -1)),
-        backend_json.get("reason", ""),
+        bool(payload.get("ok", False)),
+        str(payload.get("color", COLOR_CODES["system_error"][1])),
+        str(payload.get("status", COLOR_CODES["system_error"][0])),
+        int(payload.get("prediction", -1)),
+        str(payload.get("reason", "")),
         int(time.time())
     ).build_transaction({
         "from": oracle_account.address,
@@ -63,26 +66,24 @@ def log_to_blockchain(panel_id, backend_json):
         "gas": 500000,
         "gasPrice": w3.to_wei("10", "gwei")
     })
-
-    signed_tx = w3.eth.account.sign_transaction(tx, oracle_private_key)
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    signed = w3.eth.account.sign_transaction(tx, ORACLE_PRIVATE_KEY)
+    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
     return w3.to_hex(tx_hash)
-
-# --- Flask routes ---
 
 @app.route("/", methods=["GET"])
 def health():
     return jsonify({"ok": True, "status": "Oracle backend running"})
 
-@app.route('/download_model', methods=['GET'])
+@app.route("/download_model", methods=["GET"])
 def download_model():
     api_key = request.headers.get("X-API-KEY")
     if api_key != ADMIN_API_KEY:
         abort(403)
-    return send_file('fault_model.pkl', as_attachment=True)
+    return send_file("fault_model.pkl", as_attachment=True)
 
 @app.route("/ingest", methods=["POST"])
 def ingest():
+    # Parse request
     try:
         data = request.get_json(force=True)
     except Exception:
@@ -93,38 +94,45 @@ def ingest():
             "reason": "PlatformError",
             "prediction": -1
         }
+        # System/platform error is always logged
         tx_hash = log_to_blockchain("unknown", response)
         response["tx_hash"] = tx_hash
         return jsonify(response), 400
 
     panel_id = data.get("panel_id", "unknown")
 
-    if panel_id == "unknown" or not data:
+    # Handle missing panel_id → treat as not installed (one-time)
+    if panel_id == "unknown":
         response = {
             "ok": False,
             "color": COLOR_CODES['not_installed'][1],
             "status": COLOR_CODES['not_installed'][0],
             "prediction": -1
         }
-        tx_hash = log_to_blockchain(panel_id, response)
-        response["tx_hash"] = tx_hash
+        if panel_history.get(panel_id) != "not_installed":
+            tx_hash = log_to_blockchain(panel_id, response)
+            response["tx_hash"] = tx_hash
+            panel_history[panel_id] = "not_installed"
         return jsonify(response), 200
 
+    # Oracle 1: validate payload
     valid, cleaned = validate_payload(data)
     if not valid:
-        reason = cleaned.get("reason", "Validation failed")
-        error_type = "SensorError" if "sensor" in reason.lower() or "missing" in reason.lower() else "PlatformError"
         response = {
             "ok": False,
             "color": COLOR_CODES['system_error'][1],
             "status": COLOR_CODES['system_error'][0],
-            "reason": error_type,
+            "reason": "SensorError",
             "prediction": -1
         }
-        tx_hash = log_to_blockchain(panel_id, response)
-        response["tx_hash"] = tx_hash
+        last = panel_history.get(panel_id)
+        if last != "system_error":
+            tx_hash = log_to_blockchain(panel_id, response)
+            response["tx_hash"] = tx_hash
+            panel_history[panel_id] = "system_error"
         return jsonify(response), 400
 
+    # Oracle 2: predict + verify ML outcomes
     ml_ok, result = predict_fault(cleaned)
     if not ml_ok:
         response = {
@@ -134,52 +142,46 @@ def ingest():
             "reason": "MLFailure",
             "prediction": -1
         }
-        tx_hash = log_to_blockchain(panel_id, response)
-        response["tx_hash"] = tx_hash
+        last = panel_history.get(panel_id)
+        if last != "system_error":
+            tx_hash = log_to_blockchain(panel_id, response)
+            response["tx_hash"] = tx_hash
+            panel_history[panel_id] = "system_error"
         return jsonify(response), 500
 
-    pred = result.get("prediction")
-    color, status = COLOR_CODES['normal'][1], COLOR_CODES['normal'][0]
-    cause = None
+    pred = int(result.get("prediction", -1))
+    cause = result.get("reason", "")
 
-    if pred == 2 or pred == 1:
-        color = COLOR_CODES['warning'][1] if pred == 2 else COLOR_CODES['fault'][1]
-        status = COLOR_CODES['warning'][0] if pred == 2 else COLOR_CODES['fault'][0]
-        st, at, x, y, z = cleaned['surface_temp'], cleaned['ambient_temp'], cleaned['accel_x'], cleaned['accel_y'], cleaned['accel_z']
-        deviations = {
-            "surface_temp": abs(st - 23.5),
-            "ambient_temp": abs(at - 24.2),
-            "accel_x": abs(x - 1.03),
-            "accel_y": abs(y - 0.00),
-            "accel_z": abs(z - -0.08)
-        }
-        main_sensor = max(deviations, key=deviations.get)
-        if main_sensor == "surface_temp":
-            cause = "Surface temperature abnormal"
-        elif main_sensor == "ambient_temp":
-            cause = "Ambient temperature abnormal"
-        elif main_sensor.startswith("accel"):
-            cause = "Orientation/tilt abnormal"
-        else:
-            cause = "Unknown anomaly"
+    if pred == 0:
+        new_status = "normal"
+        color, status = COLOR_CODES['normal'][1], COLOR_CODES['normal'][0]
+    elif pred == 2:
+        new_status = "warning"
+        color, status = COLOR_CODES['warning'][1], COLOR_CODES['warning'][0]
+    elif pred == 1:
+        new_status = "fault"
+        color, status = COLOR_CODES['fault'][1], COLOR_CODES['fault'][0]
+    else:
+        new_status = "system_error"
+        color, status = COLOR_CODES['system_error'][1], COLOR_CODES['system_error'][0]
 
     response = {
-        "ok": True,
+        "ok": (new_status != "system_error"),
         "color": color,
         "status": status,
         "prediction": pred
     }
-    if cause:
+    if cause and new_status in ("warning", "fault"):
         response["reason"] = cause
 
-    tx_hash = log_to_blockchain(panel_id, response)
-    response["tx_hash"] = tx_hash
+    # Event-driven logging: only on status change
+    last_status = panel_history.get(panel_id)
+    if last_status != new_status:
+        tx_hash = log_to_blockchain(panel_id, response)
+        response["tx_hash"] = tx_hash
+        panel_history[panel_id] = new_status
 
     return jsonify(response), 200
-
-@app.route("/panel_history/<panel_id>", methods=["GET"])
-def get_panel_history(panel_id):
-    return jsonify({"panel_id": panel_id, "history": panel_history.get(panel_id, [])})
 
 @app.route("/retrain", methods=["POST"])
 def retrain():
@@ -191,8 +193,7 @@ def retrain():
     ok, msg = retrain_model(features, labels)
     if ok:
         return jsonify({"ok": True, "status": msg}), 200
-    else:
-        return jsonify({"ok": False, "error": msg}), 500
+    return jsonify({"ok": False, "error": msg}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
