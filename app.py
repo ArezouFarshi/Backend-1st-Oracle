@@ -45,7 +45,7 @@ abi = [
 contract_address = "0xB0561d4580126DdF8DEEA9B7e356ee3F26A52e40"
 contract = w3.eth.contract(address=contract_address, abi=abi)
 
-oracle_private_key = os.environ["0fc530d3f88969a28bf0b9e935aee66e6c1294a2329c12826500cfb673a39f79"]
+oracle_private_key = os.environ["ORACLE_PRIVATE_KEY"]
 oracle_account = w3.eth.account.from_key(oracle_private_key)
 
 def log_to_blockchain(panel_id, backend_json):
