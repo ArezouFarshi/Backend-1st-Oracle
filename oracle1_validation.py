@@ -1,4 +1,11 @@
 def validate_payload(data: dict):
+    """
+    Oracle 1: Trust Filter (unchanged logic per your original design).
+    Returns:
+      - (False, {"reason": "...purple system error..."}) on hard failure
+      - (True, {"warning": "...", **data}) on warning but pass-through
+      - (True, data) on clean, valid payload
+    """
     required = ["panel_id", "surface_temp", "ambient_temp", "accel_x", "accel_y", "accel_z"]
     
     for field in required:
@@ -6,7 +13,7 @@ def validate_payload(data: dict):
         if field not in data or data[field] is None:
             return False, {"reason": f"System error: {field} missing or null"}
         
-        # Check for sensor disconnected or stuck (flat zero, which often means disconnected wire)
+        # Check for sensor disconnected or stuck (flat zero, often a disconnected wire)
         if isinstance(data[field], (int, float)) and abs(data[field]) < 0.001 and field != "panel_id":
             return False, {"reason": f"System error: {field} possibly disconnected (value={data[field]})"}
 
