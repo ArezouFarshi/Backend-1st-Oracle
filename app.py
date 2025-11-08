@@ -37,11 +37,15 @@ def diagnose_fault(data):
             messages.append("Ambient temperature out of comfort range: possible HVAC issue or open window.")
             if 18 < at < 20 or 28 < at < 30:
                 warning = True
-    # Panel moved/displaced
+    # Panel moved/displaced — thresholds updated!
     accel_x, accel_y, accel_z = data.get('accel_x', 0), data.get('accel_y', 0), data.get('accel_z', 1)
-    if abs(accel_x) > 1.2 or abs(accel_y) > 1.2 or abs(accel_z) < 0.8:
+    # Treat up to 1.10 as normal
+    if abs(accel_x) > 1.10 or abs(accel_y) > 1.10 or abs(accel_z) < 0.7:
         messages.append("Panel orientation abnormal: possible displacement, fixing failure, or wind-induced movement.")
-        if 1.0 < abs(accel_x) <= 1.2 or 1.0 < abs(accel_y) <= 1.2 or 0.7 < abs(accel_z) < 0.8:
+        # Mild warning for 1.05–1.10
+        if (1.05 < abs(accel_x) <= 1.10 or
+            1.05 < abs(accel_y) <= 1.10 or
+            0.7 < abs(accel_z) < 0.8):
             warning = True
     if warning and messages:
         return "; ".join(messages), "warning"
