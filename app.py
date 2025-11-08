@@ -10,7 +10,7 @@ app = Flask(__name__)
 
 # --- Access and per-panel state ---
 ADMIN_API_KEY = "Admin_acsess_to_platform"
-panel_history = {}       # { panel_id: "not_installed" | "normal" | "warning" | "fault" | "system_error" }
+panel_history = {}       # { panel_id: last_status }
 panel_last_seen = {}     # { panel_id: unix_timestamp }
 
 COLOR_CODES = {
@@ -173,16 +173,13 @@ def ingest():
         response = log_if_changed(panel_id, "system_error", payload)
         return jsonify(response), 400
 
-    if isinstance(vresult, dict) and "warning" in vresult:
-        cleaned = {k: vresult.get(k, data.get(k)) for k in ["surface_temp", "ambient_temp", "accel_x", "accel_y", "accel_z"]}
-    else:
-        cleaned = {
-            "surface_temp": data["surface_temp"],
-            "ambient_temp": data["ambient_temp"],
-            "accel_x": data["accel_x"],
-            "accel_y": data["accel_y"],
-            "accel_z": data["accel_z"]
-        }
+    cleaned = {
+        "surface_temp": data["surface_temp"],
+        "ambient_temp": data["ambient_temp"],
+        "accel_x": data["accel_x"],
+        "accel_y": data["accel_y"],
+        "accel_z": data["accel_z"]
+    }
 
     ml_ok, ml_result = predict_fault(cleaned)
     if not ml_ok:
@@ -226,4 +223,9 @@ def ingest():
     payload = {
         "valid": final.get("valid", color != COLOR_CODES['system_error'][1]),
         "severity_color": color,
-        "state
+        "state": final.get("state", COLOR_CODES['system_error'][0]),
+        "details": final.get("details", ""),
+        "prediction": prediction
+    }
+    response = log_if_changed(panel_id, new_status, payload)
+    return jsonify
