@@ -228,4 +228,9 @@ def ingest():
         "prediction": prediction
     }
     response = log_if_changed(panel_id, new_status, payload)
-    return jsonify
+    return jsonify(response), 200
+
+
+# --- Entrypoint ---
+if __name__ == "__main__":
+    # Render sets PORT env var; default to 
