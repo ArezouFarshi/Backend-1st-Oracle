@@ -15,7 +15,7 @@ panel_last_seen = {}     # { panel_id: unix_timestamp }
 
 COLOR_CODES = {
     "not_installed":   ("Not installed yet", "gray"),
-    "normal":          ("Installed and healthy (Normal operation)", "blue"),
+    "normal":          ("Installed_Normal operation", "blue"),
     "warning":         ("Warning (abnormal values detected)", "yellow"),
     "fault":           ("Confirmed fault (urgent action needed)", "red"),
     "system_error":    ("Sensor/ML system/platform error (System error)", "purple"),
