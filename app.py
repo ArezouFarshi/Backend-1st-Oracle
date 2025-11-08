@@ -9,8 +9,9 @@ from oracle2_finalize import finalize_event
 app = Flask(__name__)
 
 # --- Access and per-panel state (last known status) ---
-ADMIN_API_KEY = "Admin_acsess_to_platform"  # keep your existing wording
-panel_history = {}  # { panel_id: "not_installed" | "normal" | "warning" | "fault" | "system_error" }
+ADMIN_API_KEY = "Admin_acsess_to_platform"  # unchanged
+panel_history = {}       # { panel_id: "not_installed" | "normal" | "warning" | "fault" | "system_error" }
+panel_last_seen = {}     # { panel_id: unix_timestamp }
 
 COLOR_CODES = {
     "not_installed":   ("Not installed yet", "gray"),
@@ -19,6 +20,9 @@ COLOR_CODES = {
     "fault":           ("Confirmed fault (urgent action needed)", "red"),
     "system_error":    ("Sensor/ML system/platform error (System error)", "purple"),
 }
+
+# --- Configurable timeout for missing-data watchdog (seconds) ---
+STALE_TIMEOUT = int(os.environ.get("STALE_TIMEOUT", "300"))  # default 5 minutes
 
 # --- Web3 / contract setup ---
 INFURA_URL = os.environ["INFURA_URL"]
@@ -48,6 +52,7 @@ ABI = [
 ]
 contract = w3.eth.contract(address=CONTRACT_ADDRESS, abi=ABI)
 
+
 def log_to_blockchain(panel_id: str, payload: dict) -> str:
     """
     Build and send addPanelEvent(panelId, ok, color, status, prediction, reason, timestamp).
@@ -70,11 +75,12 @@ def log_to_blockchain(panel_id: str, payload: dict) -> str:
     tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
     return w3.to_hex(tx_hash)
 
+
 def log_if_changed(panel_id: str, new_status: str, payload: dict) -> dict:
     """
     Event-driven logging helper:
     - Logs to blockchain only if status changes.
-    - Updates panel_history.
+    - Updates panel_history with canonical status keys.
     - Returns payload with tx_hash if logged.
     """
     last_status = panel_history.get(panel_id)
@@ -84,9 +90,19 @@ def log_if_changed(panel_id: str, new_status: str, payload: dict) -> dict:
         panel_history[panel_id] = new_status
     return payload
 
+
+def mark_seen(panel_id: str):
+    """
+    Record last time a panel was seen (ingest received).
+    """
+    if panel_id and panel_id != "unknown":
+        panel_last_seen[panel_id] = int(time.time())
+
+
 @app.route("/", methods=["GET"])
 def health():
-    return jsonify({"ok": True, "status": "Oracle backend running"})
+    return jsonify({"ok": True, "status": "Oracle backend running", "timeout": STALE_TIMEOUT})
+
 
 # Admin-only model download (unchanged as requested)
 @app.route("/download_model", methods=["GET"])
@@ -95,6 +111,46 @@ def download_model():
     if api_key != ADMIN_API_KEY:
         abort(403)
     return send_file("fault_model.pkl", as_attachment=True)
+
+
+@app.route("/monitor", methods=["POST"])
+def monitor():
+    """
+    Watchdog: detect panels that stopped sending data and log purple system error once.
+    Body (optional): {"panels": ["ID_27_C_42", "..."]}
+    If body absent, checks all panels that were seen at least once.
+    """
+    payload = request.get_json(silent=True) or {}
+    now = int(time.time())
+    scope = payload.get("panels")
+    checked = scope if isinstance(scope, list) and scope else list(panel_last_seen.keys())
+
+    results = []
+    for pid in checked:
+        last = panel_last_seen.get(pid)
+        if not last:
+            results.append({"panel_id": pid, "logged": False, "note": "Never seen"})
+            continue
+
+        is_stale = (now - last) >= STALE_TIMEOUT
+        if is_stale:
+            if panel_history.get(pid) != "system_error":
+                purple = {
+                    "ok": False,
+                    "color": COLOR_CODES["system_error"][1],
+                    "status": COLOR_CODES["system_error"][0],
+                    "reason": "No data received (microcontroller/power/communication failure)",
+                    "prediction": -1
+                }
+                logged = log_if_changed(pid, "system_error", purple)
+                results.append({"panel_id": pid, "logged": True, "tx_hash": logged.get("tx_hash")})
+            else:
+                results.append({"panel_id": pid, "logged": False, "note": "Already in system_error"})
+        else:
+            results.append({"panel_id": pid, "logged": False, "note": "Active"})
+
+    return jsonify({"ok": True, "checked": results, "timeout": STALE_TIMEOUT}), 200
+
 
 @app.route("/ingest", methods=["POST"])
 def ingest():
@@ -115,6 +171,9 @@ def ingest():
         return jsonify(response), 400
 
     panel_id = data.get("panel_id", "unknown")
+
+    # Record last-seen time for watchdog
+    mark_seen(panel_id)
 
     # Installation logic (one-time): if panel_id unknown treat as not_installed
     if panel_id == "unknown":
@@ -141,7 +200,7 @@ def ingest():
         response = log_if_changed(panel_id, "system_error", payload)
         return jsonify(response), 400
 
-    # If Oracle 1 flagged a warning (pass-through), preserve cleaned data
+    # Build cleaned data (preserve pass-through when Oracle 1 returned a warning)
     if isinstance(vresult, dict) and "warning" in vresult:
         cleaned = {k: vresult.get(k, data.get(k)) for k in ["surface_temp", "ambient_temp", "accel_x", "accel_y", "accel_z"]}
     else:
@@ -176,7 +235,6 @@ def ingest():
 
     # If finalize_event says skip (duplicate normal), return current state without logging
     if not ok2 and final.get("skip"):
-        # Build a lightweight response showing current normal state
         response = {
             "ok": True,
             "color": COLOR_CODES['normal'][1],
@@ -185,17 +243,15 @@ def ingest():
         }
         return jsonify(response), 200
 
-    # Otherwise, log if status changed
-    # We need to infer new_status from final["status"]
-    # Map status string back to canonical key
-    status_str = final["status"]
-    if status_str.startswith("Installed and healthy"):
+    # Map color to canonical status key and prediction code
+    color = final.get("color", COLOR_CODES['system_error'][1])
+    if color == "blue":
         new_status = "normal"
         prediction = 0
-    elif status_str.startswith("Warning"):
+    elif color == "yellow":
         new_status = "warning"
         prediction = 2
-    elif status_str.startswith("Confirmed fault"):
+    elif color == "red":
         new_status = "fault"
         prediction = 1
     else:
@@ -203,14 +259,15 @@ def ingest():
         prediction = -1
 
     payload = {
-        "ok": final.get("ok", True),
-        "color": final.get("color", COLOR_CODES['system_error'][1]),
-        "status": status_str,
+        "ok": final.get("ok", color != COLOR_CODES['system_error'][1]),
+        "color": color,
+        "status": final.get("status", COLOR_CODES['system_error'][0]),
         "reason": final.get("reason", ""),
         "prediction": prediction
     }
     response = log_if_changed(panel_id, new_status, payload)
     return jsonify(response), 200
+
 
 # Admin retraining (unchanged as requested)
 @app.route("/retrain", methods=["POST"])
@@ -224,6 +281,7 @@ def retrain():
     if ok:
         return jsonify({"ok": True, "status": msg}), 200
     return jsonify({"ok": False, "error": msg}), 500
+
 
 if __name__ == "__main__":
     # In production, use Gunicorn or similar WSGI server
