@@ -32,22 +32,21 @@ def predict_fault(data: dict):
         ]).reshape(1, -1)
         prediction = int(model.predict(features)[0])
 
-        # Identify primary anomalous sensor (rule-based deviation from baseline)
+        # Lightweight anomaly cause (rule-based deviation from baseline)
         deviations = {
             "surface_temp": abs(data["surface_temp"] - 23.5),
             "ambient_temp": abs(data["ambient_temp"] - 24.2),
-            "accel_x": abs(data["accel_x"] - 1.03),
+            "accel_x": abs(data["accel_x"] - 1.00),
             "accel_y": abs(data["accel_y"] - 0.00),
             "accel_z": abs(data["accel_z"] - -0.08)
         }
         main_sensor = max(deviations, key=deviations.get)
-
         if main_sensor == "surface_temp":
             cause = "Surface temperature abnormal"
         elif main_sensor == "ambient_temp":
             cause = "Ambient temperature abnormal"
         elif main_sensor.startswith("accel"):
-            cause = "Orientation/tilt abnormal"
+            cause = "Panel orientation abnormal"
         else:
             cause = "Unknown anomaly"
 
