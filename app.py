@@ -107,22 +107,30 @@ def download_model():
 @app.route("/train", methods=["POST"])
 @app.route("/retrain", methods=["POST"])
 def train():
-    """
-    Retrain the ML model with new data (admin only).
-    Returns 200 on success, 400 on bad data, 500 on unexpected errors.
-    """
     _check_admin()
     try:
         data = request.get_json(force=True)
     except Exception:
         return jsonify({"valid": False, "details": "Invalid JSON payload"}), 400
 
+    # Expect features + labels
+    features = data.get("features")
+    labels   = data.get("labels")
+    if features is None or labels is None:
+        return jsonify({
+            "valid": False,
+            "details": "Missing 'features' or 'labels'. Provide both arrays of equal length."
+        }), 400
+    if not isinstance(features, list) or not all(isinstance(r, list) for r in features):
+        return jsonify({"valid": False, "details": "'features' must be a list of lists of numbers."}), 400
+    if not isinstance(labels, list) or len(labels) != len(features):
+        return jsonify({"valid": False, "details": "'labels' length must match 'features'."}), 400
+
     try:
-        ok, result = retrain_model(data)
+        ok, result = retrain_model(features, labels)  # <-- pass BOTH args
         return jsonify({"valid": ok, "details": result}), (200 if ok else 400)
     except Exception as e:
         return jsonify({"valid": False, "details": f"Training error: {e}"}), 500
-
 
 @app.route("/monitor", methods=["POST"])
 def monitor():
